@@ -77,7 +77,7 @@ static void adder(void * unusedpointer, unsigned long addernumber)
 	while (flag) {
 		/* loop doing increments until we achieve the overall number
 		   of increments */
-		
+
 		lock_acquire(counter_lock);
 		a = counter;
 		if (a < NADDS) {
@@ -197,6 +197,7 @@ int maths (void * data1, unsigned long data2)
         
 	/* clean up the semaphore we allocated earlier */
 	sem_destroy(finished);
+	lock_destroy(counter_lock);
 	return 0;
 }
 
