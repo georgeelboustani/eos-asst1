@@ -100,6 +100,7 @@ void order_paint(struct paintcan *can)
 	P(order->status);
 
 	sem_destroy(order->status);
+	kfree(order);
 }
 
 
@@ -255,5 +256,7 @@ void paintshop_close(void)
 	lock_destroy(order_queue_lock);
 	cv_destroy(cv_order_queue_empty);
 	cv_destroy(cv_order_queue_full);
+
+	kfree(order_queue);
 }
 
