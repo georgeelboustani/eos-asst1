@@ -11,25 +11,30 @@
 
 /*
  * **********************************************************************
- * OUR Global Variables
+ * OUR Structs and Global Variables
  */
 
 struct order_form {
     struct paintcan* can;
-    struct semaphore *status;
+    struct semaphore *status; // Used to track the status of the order
 };
 
+// Number of customers in the store
 int num_customers;
 
+// Lock on the paint tint array
 struct lock *paint_tint_lock;
 
+// Lock on the order queue
 struct lock *order_queue_lock;
+// Condition variable for empty queue
 struct cv *cv_order_queue_empty;
+// Condition variable for full queue
 struct cv *cv_order_queue_full;
 
 /*
  * **********************************************************************
- * Circular buffer stuff to handle orders
+ * Circular queue stuff to handle the order queue
  * **********************************************************************
  */
 
@@ -42,12 +47,15 @@ struct order_form **order_queue;
 int order_queue_start;
 int order_queue_count;
 
+// Return true if queue is full anf false otherwise
 int order_queue_full(void) {
 	return order_queue_count == NCUSTOMERS;
 }
+// Return true if queue is empty and false otherwise
 int order_queue_empty(void) {
 	return order_queue_count == 0;
 }
+// Push the order provided onto the queue
 void order_queue_push(struct order_form* order) {
 	int end = (order_queue_start + order_queue_count) % NCUSTOMERS;
 	order_queue[end] = order;
@@ -57,6 +65,7 @@ void order_queue_push(struct order_form* order) {
 		order_queue_count++;
 	}
 }
+// Remove the first item on the queue and return it
 struct order_form* order_queue_pop(void) {
     struct order_form* order = order_queue[order_queue_start];
     order_queue_start = (order_queue_start + 1) % NCUSTOMERS;
@@ -82,6 +91,7 @@ struct order_form* order_queue_pop(void) {
 
 void order_paint(struct paintcan *can)
 {
+	// Create an order form. This includes the can along with a status semaphore
 	struct order_form* order = kmalloc(sizeof(struct order_form *));
 	order->can = can;
 	order->status = sem_create("order_form_sem", 0);
@@ -89,6 +99,7 @@ void order_paint(struct paintcan *can)
 		panic("paintshop: sem create failed");
 	}
 
+	// Add the order to the queue
 	lock_acquire(order_queue_lock);
 	while (order_queue_full()) {
 		cv_wait(cv_order_queue_full, order_queue_lock);
@@ -97,8 +108,10 @@ void order_paint(struct paintcan *can)
 	cv_signal(cv_order_queue_empty, order_queue_lock);
 	lock_release(order_queue_lock);
 
+	// Customer waits for the order to be filled
 	P(order->status);
 
+	// Clean up after customers order
 	sem_destroy(order->status);
 	kfree(order);
 }
@@ -116,6 +129,8 @@ void order_paint(struct paintcan *can)
 void go_home(void)
 {
 	num_customers--;
+
+	// If store is empty, tell all the waiting staff to stop waiting
 	if (num_customers == 0) {
 		cv_broadcast(cv_order_queue_empty, order_queue_lock);
 	}
@@ -144,12 +159,14 @@ void go_home(void)
 
 void * take_order(void)
 {
+	// Get access to the order queue
 	lock_acquire(order_queue_lock);
 	while (num_customers > 0 && order_queue_empty()) {
 		cv_wait(cv_order_queue_empty, order_queue_lock);
 	}
 
 	if (num_customers > 0) {
+		// Staff takes an order to work on
 		struct order_form* order = order_queue_pop();
 
 		cv_signal(cv_order_queue_full, order_queue_lock);
@@ -157,6 +174,7 @@ void * take_order(void)
 
 		return order;
 	} else {
+		// There is no more customers, so staff should leave
 		lock_release(order_queue_lock);
 		return NULL;
 	}
@@ -176,6 +194,8 @@ void * take_order(void)
 void fill_order(void *v)
 {
 	struct order_form* form = (struct order_form*)v;
+
+	// Fulfill the orders
 	lock_acquire(paint_tint_lock);
 	mix(form->can);
 	lock_release(paint_tint_lock);
@@ -191,6 +211,7 @@ void fill_order(void *v)
 void serve_order(void *v)
 {
 	struct order_form* form = (struct order_form*)v;
+	// Serve the order back to the customer
 	V(form->status);
 }
 
