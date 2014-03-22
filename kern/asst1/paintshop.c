@@ -9,15 +9,15 @@
 
 
 
-struct order_form {
-    struct paintcan* can;
-    struct semaphore *status;
-};
-
 /*
  * **********************************************************************
  * OUR Global Variables
  */
+
+struct order_form {
+    struct paintcan* can;
+    struct semaphore *status;
+};
 
 int num_customers;
 
