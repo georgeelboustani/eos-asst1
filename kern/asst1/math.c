@@ -77,7 +77,8 @@ static void adder(void * unusedpointer, unsigned long addernumber)
 	while (flag) {
 		/* loop doing increments until we achieve the overall number
 		   of increments */
-        lock_acquire(counter_lock);
+		
+		lock_acquire(counter_lock);
 		a = counter;
 		if (a < NADDS) {
 			counter = counter + 1;
