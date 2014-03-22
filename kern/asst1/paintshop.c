@@ -9,13 +9,60 @@
 
 
 
+struct order_form {
+    struct paintcan* can;
+    struct semaphore *status;
+};
+
 /*
  * **********************************************************************
- * YOU ARE FREE TO CHANGE THIS FILE BELOW THIS POINT AS YOU SEE FIT
- *
+ * OUR Global Variables
  */
 
+int num_customers;
 
+struct lock *paint_tint_lock;
+
+struct lock *order_queue_lock;
+struct cv *cv_order_queue_empty;
+struct cv *cv_order_queue_full;
+
+/*
+ * **********************************************************************
+ * Circular buffer stuff to handle orders
+ * **********************************************************************
+ */
+
+int order_queue_full(void);
+int order_queue_empty(void);
+void order_queue_push(struct order_form*);
+struct order_form* order_queue_pop(void);
+
+struct order_form **order_queue;
+int order_queue_start;
+int order_queue_count;
+
+int order_queue_full(void) {
+	return order_queue_count == NCUSTOMERS;
+}
+int order_queue_empty(void) {
+	return order_queue_count == 0;
+}
+void order_queue_push(struct order_form* order) {
+	int end = (order_queue_start + order_queue_count) % NCUSTOMERS;
+	order_queue[end] = order;
+	if (order_queue_count == NCUSTOMERS) {
+		order_queue_start = (order_queue_start + 1) % NCUSTOMERS;
+	} else {
+		order_queue_count++;
+	}
+}
+struct order_form* order_queue_pop(void) {
+    struct order_form* order = order_queue[order_queue_start];
+    order_queue_start = (order_queue_start + 1) % NCUSTOMERS;
+    order_queue_count--;
+    return order;
+}
 
 /*
  * **********************************************************************
@@ -35,8 +82,24 @@
 
 void order_paint(struct paintcan *can)
 {
-	(void)can;
-	panic("You need to write some code!!!!\n");
+	struct order_form* order = kmalloc(sizeof(struct order_form *));
+	order->can = can;
+	order->status = sem_create("order_form_sem", 0);
+	if (order->status == NULL) {
+		panic("paintshop: sem create failed");
+	}
+
+	lock_acquire(order_queue_lock);
+	while (order_queue_full()) {
+		cv_wait(cv_order_queue_full, order_queue_lock);
+	}
+	order_queue_push(order);
+	cv_signal(cv_order_queue_empty, order_queue_lock);
+	lock_release(order_queue_lock);
+
+	P(order->status);
+
+	sem_destroy(order->status);
 }
 
 
@@ -51,7 +114,10 @@ void order_paint(struct paintcan *can)
 
 void go_home(void)
 {
-
+	num_customers--;
+	if (num_customers == 0) {
+		cv_broadcast(cv_order_queue_empty, order_queue_lock);
+	}
 }
 
 
@@ -77,8 +143,22 @@ void go_home(void)
 
 void * take_order(void)
 {
-	panic("You need to write some code!!!!\n");
-	return NULL;
+	lock_acquire(order_queue_lock);
+	while (num_customers > 0 && order_queue_empty()) {
+		cv_wait(cv_order_queue_empty, order_queue_lock);
+	}
+
+	if (num_customers > 0) {
+		struct order_form* order = order_queue_pop();
+
+		cv_signal(cv_order_queue_full, order_queue_lock);
+		lock_release(order_queue_lock);
+
+		return order;
+	} else {
+		lock_release(order_queue_lock);
+		return NULL;
+	}
 }
 
 
@@ -94,7 +174,10 @@ void * take_order(void)
 
 void fill_order(void *v)
 {
-	(void)v;
+	struct order_form* form = (struct order_form*)v;
+	lock_acquire(paint_tint_lock);
+	mix(form->can);
+	lock_release(paint_tint_lock);
 }
 
 
@@ -106,7 +189,8 @@ void fill_order(void *v)
 
 void serve_order(void *v)
 {
-	(void)v;
+	struct order_form* form = (struct order_form*)v;
+	V(form->status);
 }
 
 
@@ -127,7 +211,35 @@ void serve_order(void *v)
 
 void paintshop_open(void)
 {
+	num_customers = NCUSTOMERS;
+	order_queue = kmalloc(sizeof(struct paintcan*) * NCUSTOMERS);
 
+	/* create a lock to be used on the paint tint array */
+	paint_tint_lock = lock_create("paint_tint_lock");
+	if (paint_tint_lock == NULL) {
+		panic("paintshop: paint_tint_lock create failed");
+	}
+
+	/* create a lock to be used on the counter */
+	order_queue_lock = lock_create("order_queue_lock");
+	if (order_queue_lock == NULL) {
+		panic("paintshop: order_queue_lock create failed");
+	}
+
+	/* create a lock to be used on the counter */
+	cv_order_queue_empty = cv_create("cv_order_queue_empty");
+	if (cv_order_queue_empty == NULL) {
+		panic("paintshop: cv_order_queue_empty create failed");
+	}
+
+		/* create a lock to be used on the counter */
+	cv_order_queue_full = cv_create("cv_order_queue_full");
+	if (cv_order_queue_full == NULL) {
+		panic("paintshop: cv_order_queue_full create failed");
+	}
+
+	order_queue_start = 0;
+	order_queue_count = 0;
 }
 
 /*
@@ -139,6 +251,9 @@ void paintshop_open(void)
 
 void paintshop_close(void)
 {
-
+	lock_destroy(paint_tint_lock);
+	lock_destroy(order_queue_lock);
+	cv_destroy(cv_order_queue_empty);
+	cv_destroy(cv_order_queue_full);
 }
 
