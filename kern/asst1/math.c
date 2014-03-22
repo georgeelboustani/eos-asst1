@@ -32,6 +32,7 @@ unsigned long int adder_counters[NADDERS];
 
 /* We use a semaphore to wait for adder() threads to finish */
 struct semaphore *finished;
+struct lock *counter_lock;
 
 
 /*
@@ -76,11 +77,12 @@ static void adder(void * unusedpointer, unsigned long addernumber)
 	while (flag) {
 		/* loop doing increments until we achieve the overall number
 		   of increments */
-                
+        lock_acquire(counter_lock);
 		a = counter;
 		if (a < NADDS) {
 			counter = counter + 1;
 			b = counter;
+			lock_release(counter_lock);
 
 			/* count the number of increments we perform  for statistics */
 			adder_counters[addernumber]++;    
@@ -91,6 +93,7 @@ static void adder(void * unusedpointer, unsigned long addernumber)
                                         addernumber, a, b) ;
 			}
 		} else {
+			lock_release(counter_lock);
 			flag = 0;
 		}
 	}
@@ -129,6 +132,14 @@ int maths (void * data1, unsigned long data2)
 
 	if (finished == NULL) {
 		panic("maths: sem create failed");
+	}
+
+	/* create a lock to be used on the counter */
+
+	counter_lock = lock_create("counter");
+
+	if (counter_lock == NULL) {
+		panic("maths: counter lock create failed");
 	}
 
 	/*
