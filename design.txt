@@ -1,1 +1,27 @@
-Place your design document here.
+ASST1 design document
+
+Part 1
+This scenario involved multiple threads accessing the same counter variable. The problem arises as threads will read the counter variable and then test this copy against a condition. This meant that the value of the variable could have been modified by another thread, and the comparison will be made using the wrong values.
+
+The solution to this was to defined a critical section using a lock, around the parts of the code where the counter was to be modified. This means the counter will only be read and written to by one thread at a time. The lock is acquired before the condition is tested, and is released inside both branches of the if statement. This is done so that the critical section can be as small as possible, as we do not want the lock to be held after counter access if finished.
+
+Part 2
+This scenario required a shared buffer to be implemented where producers pushed items and consumers popped items. This buffer was a shared resource, and any access to this had to be in a critical section. This was solves through use of locks, and condition variable were useful in order to handle the buffer full and empty states.
+
+When full, the producer would wait, releasing the lock until signalled by a consumer popping an item of the buffer. When empty, the consumer would wait until signalled by a producer pushing an item into the buffer. This was done through the use of condition variables.
+
+Part 3
+This scenario was similar to the producer consumer problem in the need for a buffer. In this case the customers pushed on orders as producers and staff popped them off as consumers. So the buffer was the first critical section, and this was handled as in part 2.
+
+For this scenario, we introduced a data structure called the order_form. This contains the can of paint, allowing the the order status. The status is a semaphore, and this is used to indicate to the customer that their order is complete and they can go home. Essentially the customer waits until the staff member signals them the order is complete and they can leave. When the last customer leaves, they broadcast to the staff members waiting on an empty order queue using a condition variable, telling them they can leave the store as well.
+
+When staff members take orders, they are essentially popping off the buffer, as outlined above. They will do this given that not all customers have left and the queue is not empty. If empty, they wait using a condition variable until customers signal a new order, or the last customer makes the broadcast to get out of the queue. If there are no more customers, then they release their lock on the order queue, and return NULL, indicating they too should leave.
+
+The actual filling of order was the interesting part of this scenario. The paint tint array was a shared resource, and more specifically we needed each tint to be a separate shared resource. This meant we needed to define critical sections around the array only when gaining access to tints, and then a critical section around the specific tints being used. This was achieved in the following way. 
+
+A lock on the tint array would first be acquired. The staff member would then wait until all the tints the order needs are available (i.e. their locks have not been acquired). Until that time, they would release the lock on the array using a condition variable called cv_tints_unavailable. Waiting until all the tints are available to proceed prevents deadlock.
+
+Once the required tints are found to be available, a lock is acquired on each of the required tints, and then the lock on the tint array is released. When we are acquiring locks on the tints, we use lock_do_i_hold to ensure we are not trying to acquire multiple locks on a tint which is requested more than once. We update a separate availablity array with 0’s and 1’s, indicating whether a tint is available or not.
+
+The staff member then mixes the can, knowing that they have exclusive access to the tints they need. Once finished, the release the locks on the tints, again ensuring not to release the same lock more than once, and update the same availability array to indicate the tints is now available. The staff member then broadcasts using the condition variable for staff members waiting on unavailable tints, telling them new tints are now available. As mentioned above, the staff member serves the order, indicating to the customer by signalling the semaphore.
+
