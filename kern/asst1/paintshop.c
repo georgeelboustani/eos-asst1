@@ -21,10 +21,7 @@ struct order_form {
 
 // Number of customers in the store
 int num_customers;
-int *available_paint;
 
-// Lock on the paint tint array
-struct lock *paint_array_lock;
 // Lock on the paint tints
 struct lock **paint_tint_locks;
 
@@ -34,8 +31,6 @@ struct lock *order_queue_lock;
 struct cv *cv_order_queue_empty;
 // Condition variable for full queue
 struct cv *cv_order_queue_full;
-// Condition variable for available tints
-struct cv *cv_tints_unavailable;
 
 int tintsAvailable(struct paintcan*);
 
@@ -202,65 +197,40 @@ void fill_order(void *v)
 {
 	int i;
 	struct order_form* form = (struct order_form*)v;
+	struct paintcan* can = form->can;
 
-	// Wait until we have acces to all the tints we need
-	lock_acquire(paint_array_lock);
-	while (!tintsAvailable(form->can)) {
-		cv_wait(cv_tints_unavailable, paint_array_lock);
+	// Stores 0 or 1, if colour lock is needed or not
+	unsigned int required_locks[NCOLOURS];
+
+	for (i = 0; i < NCOLOURS; i++) {
+		required_locks[i] = 0;
+	}
+
+	// sort colours in ascending order
+	for (i = 0; i < PAINT_COMPLEXITY; i++) {
+		int col = can->requested_colours[i];
+		if (col > 0) {
+			required_locks[col - 1] = 1;
+		}
 	}
 
 	// Gain exclusive access to the tints we need
-	struct paintcan* can = form->can;
-	for (i = 0; i < PAINT_COMPLEXITY; i++) {
-		int col = can->requested_colours[i];
-
-		// Has a colour been specified
-		if (col > 0) {
-			struct lock* colourLock = paint_tint_locks[col - 1];
-			// Have we already acquired the colours lock
-			if (!lock_do_i_hold(colourLock)) {
-				available_paint[col - 1] = 0;
-				lock_acquire(colourLock);
-			}
+	for (i = 0; i < NCOLOURS; i++) {
+		if (required_locks[i]) {
+			lock_acquire(paint_tint_locks[i]);
 		}
 	}
-	lock_release(paint_array_lock);
 	
 	// Fulfill the orders now that we have access to our tints
 	mix(can);
 
 	// Release the locks to the tints we were using
-	for (i = 0; i < PAINT_COMPLEXITY; i++) {
-		int col = can->requested_colours[i];
-
-		// Has a colour been specified
-		if (col > 0) {
-			struct lock* colourLock = paint_tint_locks[col - 1];
-			// Dont release the same lock twice, incase tints are doubled up
-			if (lock_do_i_hold(colourLock)) {
-				lock_release(colourLock);
-				available_paint[col - 1] = 1;
-			}
+	for (i = 0; i < NCOLOURS; i++) {
+		if (required_locks[i]) {
+			lock_release(paint_tint_locks[i]);
 		}
 	}
-	cv_broadcast(cv_tints_unavailable, paint_array_lock);
 }
-
-int tintsAvailable(struct paintcan* can) {
-	int i, allAvailable = 0;
-	// Check if the colours we need are all available
-	for (i = 0; i < PAINT_COMPLEXITY; i++) {
-		int col = can->requested_colours[i];
-		if (col == 0) {
-			// "No colour" is always available
-			allAvailable++;
-		} else {
-			allAvailable += available_paint[col - 1];
-		}
-	}
-	return allAvailable == PAINT_COMPLEXITY;
-}
-
 
 /*
  * serve_order()
@@ -296,21 +266,17 @@ void paintshop_open(void)
 	int i;
 
 	num_customers = NCUSTOMERS;
-	available_paint = kmalloc(sizeof(int) * NCOLOURS);
-	for (i = 0; i < NCOLOURS; i++) {
-		// Initialise all colours as available
-		available_paint[i] = 1;
-	}
 
 	order_queue = kmalloc(sizeof(struct paintcan*) * NCUSTOMERS);
+	if (order_queue == NULL) {
+		panic("paintshop: order_queue create failed");
+	}
 
-	/* create a lock to be used on the paint tint array for each tint*/
-	paint_array_lock = lock_create("paint_array_lock");
-	if (paint_array_lock == NULL) {
-		panic("paintshop: paint_array_lock create failed");
+	paint_tint_locks = kmalloc(sizeof(struct lock*) * NCOLOURS);
+	if (paint_tint_locks == NULL) {
+		panic("paintshop: paint_tint_locks create failed");
 	}
 	
-	paint_tint_locks = kmalloc(sizeof(struct lock*) * NCOLOURS);
 	for (i = 0; i < NCOLOURS; i++) {
         paint_tint_locks[i] = lock_create("paint_tint_locks_" + (i + 1));
 		if (paint_tint_locks[i] == NULL) {
@@ -336,12 +302,6 @@ void paintshop_open(void)
 		panic("paintshop: cv_order_queue_full create failed");
 	}
 
-	/* create a cv to be used on the tints for availability */
-	cv_tints_unavailable = cv_create("cv_tints_unavailable");
-	if (cv_tints_unavailable == NULL) {
-		panic("paintshop: cv_tints_unavailable create failed");
-	}
-
 	order_queue_start = 0;
 	order_queue_count = 0;
 }
@@ -361,13 +321,10 @@ void paintshop_close(void)
 	}
 	kfree(paint_tint_locks);
 
-	lock_destroy(paint_array_lock);
 	lock_destroy(order_queue_lock);
 	cv_destroy(cv_order_queue_empty);
 	cv_destroy(cv_order_queue_full);
-	cv_destroy(cv_tints_unavailable);
 
 	kfree(order_queue);
-	kfree(available_paint);
 }
 
