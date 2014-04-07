@@ -4,11 +4,10 @@
 #include <thread.h>
 #include <synch.h>
 
-
-
 enum {
-  NADDERS = 10,    /* the number of adder threads */
-  NADDS   = 10000, /* the number of overall increments to perform */
+	NADDERS = 10,    /* the number of adder threads */
+	NADDS   = 10000, /* the number of overall increments to perform */
+	NCOUNTERS = 1,   /* the number of counters available */
 };
 
 
@@ -39,7 +38,8 @@ struct semaphore *finished;
  * ADD YOUR OWN VARIABLES HERE AS NEEDED
  * **********************************************************************
  */
-
+/* Use a semaphore to indicate how many counters are available for use */
+struct semaphore *counterAccess;
 
 
 /*
@@ -65,39 +65,40 @@ struct semaphore *finished;
 
 static void adder(void * unusedpointer, unsigned long addernumber)
 {
-        unsigned long int a, b;
-        int flag = 1;
-  
+	unsigned long int a, b;
+	int flag = NCOUNTERS;
+
 	/*
 	 * Avoid unused variable warnings.
 	 */
 	(void) unusedpointer; /* remove this line if variable is used */
-        
+
 	while (flag) {
 		/* loop doing increments until we achieve the overall number
 		   of increments */
-                
+		P(counterAccess);
 		a = counter;
 		if (a < NADDS) {
-			counter = counter + 1;
+			counter = counter + NCOUNTERS;
 			b = counter;
 
 			/* count the number of increments we perform  for statistics */
 			adder_counters[addernumber]++;    
-                        
+
 			/* check we are getting sane results */
-			if (a + 1 != b) {
+			if (a + NCOUNTERS != b) {
 				kprintf("In thread %ld, %ld + 1 == %ld?\n", 
-                                        addernumber, a, b) ;
+						addernumber, a, b) ;
 			}
 		} else {
 			flag = 0;
 		}
+		V(counterAccess);
 	}
-        
+
 	/* signal the main thread we have finished and then exit */
 	V(finished);
-        
+
 	thread_exit();
 }
 
@@ -136,37 +137,42 @@ int maths (void * data1, unsigned long data2)
 	 * INSERT ANY INITIALISATION CODE YOU REQUIRE HERE
 	 * **********************************************************************
 	 */
+	/* create a semaphore to count how many counters are available for use */
+	counterAccess = sem_create("counterAccess", NCOUNTERS);
 
+	if (counterAccess == NULL) {
+		panic("maths: sem create failed");
+	}
 
 	/*
 	 * Start NADDERS adder() threads.
 	 */
-        
+
 	kprintf("Starting %d adder threads\n", NADDERS);
-        
+
 	for (index = 0; index < NADDERS; index++) {
-                
-                error = thread_fork("adder thread", NULL,
-                                    &adder, NULL, index);
+
+		error = thread_fork("adder thread", NULL,
+				&adder, NULL, index);
 
 		/*
 		 * panic() on error.
 		 */
-                
+
 		if (error) {
 			panic("adder: thread_fork failed: %s\n", strerror(error));
 		}
 	}
-        
-        
+
+
 	/* Wait until the adder threads complete */
-        
+
 	for (index = 0; index < NADDERS; index++) {
 		P(finished);
 	}
-        
+
 	kprintf("Adder threads performed %ld adds\n", counter);
-        
+
 	/* Print out some statistics */
 	sum = 0;
 	for (index = 0; index < NADDERS; index++) {
@@ -175,14 +181,15 @@ int maths (void * data1, unsigned long data2)
 				index, adder_counters[index]);
 	}
 	kprintf("The adders performed %ld increments overall\n", sum);
-        
+
 	/*
 	 * **********************************************************************
 	 * INSERT ANY CLEANUP CODE YOU REQUIRE HERE 
 	 * **********************************************************************
 	 */
-        
-        
+	/* clean up the semaphore we allocated earlier */
+	sem_destroy(counterAccess);
+
 	/* clean up the semaphore we allocated earlier */
 	sem_destroy(finished);
 	return 0;
